@@ -591,6 +591,9 @@ bool Sql_cmd_show_processlist::execute_inner(THD *thd) {
     then execute a query on performance_schema.processlist. Otherwise,
     fall back to the legacy method.
   */
+  // 有两种执行processlist的方法
+  // 1. 通过performance_schema.processlist
+  // 2. 通过原有的方式
   if (use_pfs()) {
     DEBUG_SYNC(thd, "pfs_show_processlist_performance_schema");
     return Sql_cmd_show::execute_inner(thd);
@@ -2712,6 +2715,7 @@ class thread_info {
   thread_info()
       : thread_id(0),
         start_time_in_secs(0),
+        create_time_in_secs(0),
         command(0),
         user(nullptr),
         host(nullptr),
@@ -2720,7 +2724,7 @@ class thread_info {
         state_info(nullptr) {}
 
   my_thread_id thread_id;
-  time_t start_time_in_secs;
+  time_t start_time_in_secs, create_time_in_secs/* 5. 定义一下我们需要展示的时间 */;
   uint command;
   const char *user, *host, *db, *proc_info, *state_info;
   CSET_STRING query_string;
@@ -2778,6 +2782,7 @@ class List_process_list : public Do_THD_Impl {
     deprecated_use_i_s_processlist_count++;
   }
 
+  // 4. 拷贝的时候将被调用。inspect_thd是每一个被循环的线程上下文，也就是thd
   void operator()(THD *inspect_thd) override {
     DBUG_TRACE;
 
@@ -2785,7 +2790,7 @@ class List_process_list : public Do_THD_Impl {
 
     {
       MUTEX_LOCK(grd_secctx, &inspect_thd->LOCK_thd_security_ctx);
-
+      // 5. 开始获取show processlist的信息。
       Security_context *inspect_sctx = inspect_thd->security_context();
 
       const LEX_CSTRING inspect_sctx_user = inspect_sctx->user();
@@ -2903,6 +2908,9 @@ class List_process_list : public Do_THD_Impl {
     /* MYSQL_TIME */
     thd_info->start_time_in_secs = inspect_thd->query_start_in_secs();
 
+    /* 6. 在这里加上我们的信息 */
+    thd_info->create_time_in_secs = inspect_thd->create_time_in_secs();
+
     m_thread_infos->push_back(thd_info);
   }
 };
@@ -2928,6 +2936,7 @@ void mysqld_list_processes(THD *thd, const char *user, bool verbose,
   Protocol *protocol = thd->get_protocol();
   DBUG_TRACE;
 
+  //  1. 定义结构以及类型
   field_list.push_back(
       new Item_int(NAME_STRING("Id"), 0, MY_INT64_NUM_DECIMAL_DIGITS));
   field_list.push_back(new Item_empty_string("User", USERNAME_CHAR_LENGTH));
@@ -2941,11 +2950,16 @@ void mysqld_list_processes(THD *thd, const char *user, bool verbose,
   field->set_nullable(true);
   field_list.push_back(field = new Item_empty_string("Info", max_query_length));
   field->set_nullable(true);
+  // 在此处加上我们的东西
+  field_list.push_back(field = new Item_temporal(MYSQL_TYPE_TIMESTAMP, Name_string("CreateTime", sizeof("CreateTime") - 1), 0, 0));
+  field->set_nullable(true);
+  // 2. 发送结构
   if (thd->send_result_metadata(field_list,
                                 Protocol::SEND_NUM_ROWS | Protocol::SEND_EOF))
     return;
 
   if (!thd->killed) {
+    // 3. 拿到当前所有的线程上下文。 这些内容将被拷贝到thread_infos结构中
     thread_infos.reserve(Global_THD_manager::get_instance()->get_thd_count());
     List_process_list list_process_list(user, &thread_infos, thd,
                                         max_query_length);
@@ -2975,6 +2989,10 @@ void mysqld_list_processes(THD *thd, const char *user, bool verbose,
     protocol->store(thd_info->state_info, system_charset_info);
     protocol->store(thd_info->query_string.str(),
                     thd_info->query_string.charset());
+    // 7. 将时间“存储”到协议中
+    MYSQL_TIME timestamp;
+    my_tz_SYSTEM->gmt_sec_to_TIME(&timestamp, thd_info->create_time_in_secs);
+    protocol->store_datetime(timestamp, 0);
     if (protocol->end_row()) break; /* purecov: inspected */
   }
   /*

@@ -1545,6 +1545,8 @@ class THD : public MDL_context_owner,
 
  private:
   bool m_is_admin_conn;
+  // 1. 定义结构保存时间
+  struct timeval m_create_time;
 
  public:
   void set_admin_connection(bool admin) { m_is_admin_conn = admin; }
@@ -3089,6 +3091,13 @@ class THD : public MDL_context_owner,
     user_time = *t;
     set_time();
   }
+
+  // 4. 获取时间
+  time_t create_time_in_secs() const { return m_create_time.tv_sec; }
+  // 2. 设置时间函数
+  void set_create_time();
+
+
   inline bool is_fsp_truncate_mode() const {
     return (variables.sql_mode & MODE_TIME_TRUNCATE_FRACTIONAL);
   }

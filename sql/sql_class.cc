@@ -857,6 +857,9 @@ THD::THD(bool enable_plugins)
   if (events_cache_ == nullptr || !events_cache_->valid()) {
     /*ToDo: Raise warning */
   }
+
+  // 3. 在THD构造函数就调用
+  set_create_time();
 }
 
 void THD::copy_table_access_properties(THD *thd) {
@@ -3204,6 +3207,12 @@ void THD::set_time() {
 #ifdef HAVE_PSI_THREAD_INTERFACE
   PSI_THREAD_CALL(set_thread_start_time)(query_start_in_secs());
 #endif
+}
+
+// 2. 设置时间函数
+void THD::set_create_time() {
+  ulonglong login_utime = my_micro_time();
+  my_micro_time_to_timeval(login_utime, &m_create_time);
 }
 
 void THD::inc_lock_usec(ulonglong lock_usec) {
